@@ -17,6 +17,7 @@ import (
 	"net"
 	"runtime"
 	"time"
+	"flag"
 
 	"github.com/yggdrasil-network/yggdrasil-go/src/address"
 )
@@ -27,13 +28,16 @@ type keySet struct {
 }
 
 func main() {
+	var minWordCount int
+	flag.IntVar(&minWordCount, "words", 0, "number of English words to find in IP address")
+	flag.Parse()
 	threads := runtime.GOMAXPROCS(0)
-	fmt.Println("Threads:", threads)
+	fmt.Println("Threads:", threads, "Minimum Words:", minWordCount)
 	start := time.Now()
 	var currentBest ed25519.PublicKey
 	newKeys := make(chan keySet, threads)
 	for i := 0; i < threads; i++ {
-		go doKeys(newKeys)
+		go doKeys(newKeys, minWordCount)
 	}
 	for {
 		newKey := <-newKeys
@@ -60,7 +64,7 @@ func isBetter(oldPub, newPub ed25519.PublicKey) bool {
 	return false
 }
 
-func doKeys(out chan<- keySet) {
+func doKeys(out chan<- keySet, minWordCount int) {
 	bestKey := make(ed25519.PublicKey, ed25519.PublicKeySize)
 	for idx := range bestKey {
 		bestKey[idx] = 0xff
@@ -70,9 +74,29 @@ func doKeys(out chan<- keySet) {
 		if err != nil {
 			panic(err)
 		}
-		if !isBetter(bestKey, pub) {
+		hitCount := 0
+
+		if minWordCount > 0 {
+			addr := address.AddrForKey(pub)
+			// Only search the first half of the IP address, except the first word
+			for idx := 2; idx < len(addr)/2; idx += 2 {
+				if (addr[idx] == 0xba && addr[idx+1] == 0xbe) ||
+					 (addr[idx] == 0xbe && addr[idx+1] == 0xad) ||
+					 (addr[idx] == 0xbe && addr[idx+1] == 0xef) ||
+					 (addr[idx] == 0xde && addr[idx+1] == 0xad) ||
+					 (addr[idx] == 0xde && addr[idx+1] == 0xaf) ||
+					 (addr[idx] == 0xde && addr[idx+1] == 0xed) ||
+					 (addr[idx] == 0xfa && addr[idx+1] == 0xce) ||
+					 (addr[idx] == 0xfe && addr[idx+1] == 0xed) {
+					hitCount += 1
+				}
+			}
+		}
+
+		if hitCount < minWordCount || !isBetter(bestKey, pub) {
 			continue
 		}
+
 		bestKey = pub
 		out <- keySet{priv, pub}
 	}
